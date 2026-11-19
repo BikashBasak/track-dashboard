@@ -1,0 +1,12 @@
+node_modules
+.next
+out
+dist
+.env
+.env.local
+.env.render
+*.log
+data/store.json
+.DS_Store
+.vercel
+.neon

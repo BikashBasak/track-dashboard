@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: track-dashboard
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /apps
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: DASHBOARD_PASSWORD
+        sync: false
