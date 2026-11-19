@@ -279,6 +279,30 @@ async function readPgStore(): Promise<StoreData> {
   });
 }
 
+async function upsertCategoryRowsMerge(
+  table: "categories" | "account_categories",
+  rows: Array<{ id: string; name: string; createdAt: number }>,
+) {
+  const db = getSql();
+  if (table === "categories") {
+    for (const cat of rows) {
+      await db`
+        INSERT INTO categories (id, name, created_at)
+        VALUES (${cat.id}, ${cat.name}, ${cat.createdAt})
+        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+      `;
+    }
+    return;
+  }
+  for (const cat of rows) {
+    await db`
+      INSERT INTO account_categories (id, name, created_at)
+      VALUES (${cat.id}, ${cat.name}, ${cat.createdAt})
+      ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+    `;
+  }
+}
+
 async function upsertCategoryRows(
   table: "categories" | "account_categories",
   rows: Array<{ id: string; name: string; createdAt: number }>,
@@ -475,6 +499,50 @@ export async function upsertStoreData(data: StoreData): Promise<StoreData> {
   return readPgStore();
 }
 
+/** Add or update rows from payload only — never delete existing tracks missing from payload. */
+export async function mergeStoreData(data: StoreData): Promise<StoreData> {
+  if (!hasDatabaseUrl()) {
+    const existing = await readJsonStore();
+    const incoming = reconcileStore(data);
+    const merged = {
+      apps: [...existing.apps],
+      accounts: [...existing.accounts],
+      categories: existing.categories,
+      accountCategories: existing.accountCategories,
+      removedApps: existing.removedApps,
+      removedAccounts: existing.removedAccounts,
+      keywords: existing.keywords,
+    };
+    // naive merge — same as client merge simplified
+    for (const app of incoming.apps) {
+      const i = merged.apps.findIndex((a) => a.appId === app.appId);
+      if (i < 0) merged.apps.push(app);
+      else merged.apps[i] = app;
+    }
+    for (const acc of incoming.accounts) {
+      const i = merged.accounts.findIndex((a) => a.developerId === acc.developerId);
+      if (i < 0) merged.accounts.push(acc);
+      else merged.accounts[i] = acc;
+    }
+    await writeJsonStore(reconcileStore(merged));
+    return readJsonStore();
+  }
+  await ensureSchema();
+  const incoming = reconcileStore(data);
+  await upsertCategoryRowsMerge("categories", incoming.categories);
+  await upsertCategoryRowsMerge("account_categories", incoming.accountCategories);
+  for (const app of incoming.apps) {
+    await upsertAppRow({ ...app, snapshots: app.snapshots?.length ? app.snapshots.slice(-2) : [] });
+  }
+  for (const account of incoming.accounts) {
+    await upsertAccountRow({ ...account, snapshots: [] });
+  }
+  for (const keyword of incoming.keywords) {
+    await upsertKeywordRow({ ...keyword, snapshots: keyword.snapshots?.slice(-2) ?? [] });
+  }
+  return readPgStore();
+}
+
 export async function isStoreEmpty(): Promise<boolean> {
   if (!hasDatabaseUrl()) {
     const data = await readJsonStore();
@@ -514,21 +582,25 @@ export async function isStoreEmpty(): Promise<boolean> {
 
 export async function migrateFromLocal(
   data: StoreData,
-  options?: { force?: boolean },
+  options?: { force?: boolean; mergeOnly?: boolean },
 ): Promise<{ migrated: boolean; store: StoreData; reason?: string }> {
   if (!hasDatabaseUrl()) {
-    const store = await upsertStoreData(data);
+    const store = options?.mergeOnly ? await mergeStoreData(data) : await upsertStoreData(data);
     return { migrated: true, store, reason: "json-fallback" };
   }
   await ensureSchema();
   const already = await getMeta("migrated_from_local_at");
   const emptyDb = await isStoreEmpty();
-  if (already && !emptyDb && !options?.force) {
+  if (already && !emptyDb && !options?.force && !options?.mergeOnly) {
     return { migrated: false, store: await readPgStore(), reason: "already-migrated" };
   }
-  const store = await upsertStoreData(data);
+  const store = options?.mergeOnly ? await mergeStoreData(data) : await upsertStoreData(data);
   await setMeta("migrated_from_local_at", String(Date.now()));
-  return { migrated: true, store, reason: options?.force ? "forced-import" : undefined };
+  return {
+    migrated: true,
+    store,
+    reason: options?.mergeOnly ? "merge-chunk" : options?.force ? "forced-import" : undefined,
+  };
 }
 
 export async function readStore(): Promise<StoreData> {

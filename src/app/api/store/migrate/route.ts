@@ -4,7 +4,7 @@ import type { StoreData } from "@/lib/playstore/types";
 import { isStoreEmpty, migrateFromLocal, readStore } from "@/lib/store/db";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 function hasLocalPayload(store?: StoreData | null) {
   if (!store) return false;
@@ -21,7 +21,7 @@ function hasLocalPayload(store?: StoreData | null) {
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as { store?: StoreData; force?: boolean };
+    const body = (await request.json()) as { store?: StoreData; force?: boolean; mergeOnly?: boolean };
     if (!hasLocalPayload(body.store)) {
       const store = await readStore();
       return Response.json({
@@ -32,7 +32,10 @@ export async function POST(request: Request) {
       });
     }
 
-    const result = await migrateFromLocal(body.store!, { force: Boolean(body.force) });
+    const result = await migrateFromLocal(body.store!, {
+      force: Boolean(body.force),
+      mergeOnly: Boolean(body.mergeOnly),
+    });
     return Response.json({
       ...result,
       database: hasDatabaseUrl() ? "postgres" : "json-fallback",

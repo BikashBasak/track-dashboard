@@ -77,10 +77,15 @@ export default function SettingsPage() {
         setDataMsg("The backup has 0 apps and 0 accounts. Use the copy from the Vercel tab, not Render.");
         return;
       }
+      const big = appCount + accCount > 50;
       setDataMsg(
-        `Step 2 of 2: Uploading ${appCount} apps and ${accCount} accounts… Please wait up to 1 minute.`,
+        `Step 2 of 2: Uploading ${appCount} apps and ${accCount} accounts… ${
+          big ? "Large list — keep this tab open; it may take 5–15 minutes." : "Please wait up to 2 minutes."
+        }`,
       );
-      const result = await watch.importStoreToServer(store);
+      const result = await watch.importStoreToServer(store, {
+        onProgress: (message) => setDataMsg(message),
+      });
       setDataOk(result.ok);
       setDataMsg(result.message);
     } catch {

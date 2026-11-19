@@ -349,7 +349,10 @@ type WatchlistApi = {
   applyKeywordSnapshot: (term: string, ranks: KeywordRank[], store: Storefront) => void;
   browserCacheSummary: () => { apps: number; accounts: number; categories: number };
   restoreBrowserCacheToServer: () => Promise<{ ok: boolean; message: string }>;
-  importStoreToServer: (store: StoreData) => Promise<{ ok: boolean; message: string }>;
+  importStoreToServer: (
+    store: StoreData,
+    options?: { onProgress?: (message: string) => void },
+  ) => Promise<{ ok: boolean; message: string }>;
 };
 
 const Ctx = createContext<WatchlistApi | null>(null);
@@ -1063,29 +1066,93 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
           return { ok: false, message: error instanceof Error ? error.message : "Upload failed." };
         }
       },
-      importStoreToServer: async (incoming: StoreData) => {
+      importStoreToServer: async (incoming: StoreData, options?: { onProgress?: (message: string) => void }) => {
+        const progress = options?.onProgress;
         const payload = reconcileStore(incoming);
         if (!storeHasRows(payload)) {
           return { ok: false, message: "The file has no apps, accounts, or categories." };
         }
-        const toUpload = storeHasRows(data) ? merge(data, payload) : payload;
+        const mergedLocal = storeHasRows(data) ? merge(data, payload) : payload;
+        const uploadBase = {
+          ...mergedLocal,
+          apps: mergedLocal.apps.map((a) => ({ ...a, snapshots: [] })),
+          accounts: mergedLocal.accounts.map((a) => ({ ...a, snapshots: [], listingMemory: undefined })),
+          keywords: mergedLocal.keywords.map((k) => ({ ...k, snapshots: [] })),
+        };
+        const batchSize = 40;
+        const needChunks =
+          uploadBase.apps.length + uploadBase.accounts.length > batchSize * 2;
+        const meta = {
+          categories: uploadBase.categories,
+          accountCategories: uploadBase.accountCategories,
+          removedApps: [] as StoreData["removedApps"],
+          removedAccounts: [] as StoreData["removedAccounts"],
+          keywords: [] as StoreData["keywords"],
+        };
         try {
-          const res = await fetch("/api/store/migrate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ store: toUpload, force: true }),
-          });
-          const json = (await res.json()) as { store?: StoreData; error?: string; reason?: string };
-          if (!res.ok || !json.store) {
-            return { ok: false, message: json.error || "Import failed." };
+          async function postChunk(chunk: StoreData, mergeOnly: boolean) {
+            const res = await fetch("/api/store/migrate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ store: chunk, force: true, mergeOnly }),
+            });
+            const json = (await res.json()) as { store?: StoreData; error?: string };
+            if (!res.ok || !json.store) {
+              throw new Error(json.error || "Upload failed.");
+            }
+            return normalize(json.store);
           }
-          const next = normalize(json.store);
+
+          let server: StoreData;
+          if (!needChunks) {
+            progress?.("Uploading…");
+            server = await postChunk(uploadBase, false);
+          } else {
+            const appParts = Math.max(1, Math.ceil(uploadBase.apps.length / batchSize));
+            const accParts = Math.max(1, Math.ceil(uploadBase.accounts.length / batchSize));
+            let part = 0;
+            const total = appParts + accParts;
+            for (let i = 0; i < uploadBase.apps.length; i += batchSize) {
+              part += 1;
+              progress?.(`Uploading apps (${part} of ${total})… keep this tab open.`);
+              await postChunk(
+                {
+                  ...meta,
+                  apps: uploadBase.apps.slice(i, i + batchSize),
+                  accounts: [],
+                },
+                true,
+              );
+            }
+            for (let i = 0; i < uploadBase.accounts.length; i += batchSize) {
+              part += 1;
+              progress?.(`Uploading accounts (${part} of ${total})… keep this tab open.`);
+              await postChunk(
+                {
+                  ...meta,
+                  apps: [],
+                  accounts: uploadBase.accounts.slice(i, i + batchSize),
+                },
+                true,
+              );
+            }
+            const res = await fetch("/api/store");
+            const json = (await res.json()) as { store?: StoreData };
+            server = normalize(json.store);
+          }
+          const next = merge(mergedLocal, server);
           persistWatchlist(next);
           setData(next);
           pushStoreToServer(next);
+          const expectedApps = payload.apps.length;
+          const expectedAcc = payload.accounts.length;
+          const missing =
+            next.apps.length < expectedApps || next.accounts.length < expectedAcc
+              ? ` Your backup had ${expectedApps} apps and ${expectedAcc} accounts — if counts are lower, run import again with a full Vercel copy.`
+              : "";
           return {
             ok: true,
-            message: `Imported: ${next.apps.length} apps, ${next.accounts.length} accounts. Refresh App / Account Tracking if the list does not update.`,
+            message: `Imported: ${next.apps.length} apps, ${next.accounts.length} accounts on the server.${missing}`,
           };
         } catch (error) {
           return { ok: false, message: error instanceof Error ? error.message : "Import failed." };
