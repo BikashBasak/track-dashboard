@@ -47,35 +47,65 @@ export default function SettingsPage() {
   const [progress, setProgress] = useState("");
   const [message, setMessage] = useState(fullSync.lastMessage || "");
   const [dataMsg, setDataMsg] = useState("");
+  const [dataOk, setDataOk] = useState<boolean | null>(null);
   const [dataBusy, setDataBusy] = useState(false);
+  const [pasteBackup, setPasteBackup] = useState("");
   const browserCache = useMemo(() => watch.browserCacheSummary(), [watch]);
 
   const nextMode = resolveFullSyncMode();
 
   async function restoreFromBrowser() {
     setDataBusy(true);
-    setDataMsg("");
+    setDataMsg("Uploading from this browser…");
+    setDataOk(null);
     const result = await watch.restoreBrowserCacheToServer();
+    setDataOk(result.ok);
     setDataMsg(result.message);
     setDataBusy(false);
   }
 
-  async function onBackupFile(file: File | null) {
-    if (!file) return;
+  async function runBackupImport(text: string) {
     setDataBusy(true);
-    setDataMsg("");
+    setDataOk(null);
+    setDataMsg("Step 1 of 2: Reading your backup…");
     try {
-      const text = await file.text();
       const store = parseBackupFileText(text);
+      const appCount = store.apps?.length ?? 0;
+      const accCount = store.accounts?.length ?? 0;
+      if (appCount === 0 && accCount === 0) {
+        setDataOk(false);
+        setDataMsg("The backup has 0 apps and 0 accounts. Use the copy from the Vercel tab, not Render.");
+        return;
+      }
+      setDataMsg(
+        `Step 2 of 2: Uploading ${appCount} apps and ${accCount} accounts… Please wait up to 1 minute.`,
+      );
       const result = await watch.importStoreToServer(store);
+      setDataOk(result.ok);
       setDataMsg(result.message);
     } catch {
+      setDataOk(false);
       setDataMsg(
-        "Could not use that file. Save the Vercel copy again in Notepad as my-tracker-backup.json (must start with { and include apps or accounts).",
+        "Could not use that backup. It must start with { and be the text you copied from the Vercel Console step.",
       );
     } finally {
       setDataBusy(false);
     }
+  }
+
+  async function onBackupFile(file: File | null) {
+    if (!file) return;
+    const text = await file.text();
+    await runBackupImport(text);
+  }
+
+  async function onPasteImport() {
+    if (!pasteBackup.trim()) {
+      setDataOk(false);
+      setDataMsg("Paste your backup in the box below first (Ctrl+V).");
+      return;
+    }
+    await runBackupImport(pasteBackup);
   }
 
   async function syncAll(forceBaseline = false) {
@@ -217,23 +247,52 @@ export default function SettingsPage() {
             {dataBusy ? "Working…" : "Restore from this browser"}
           </button>
           <label className="cursor-pointer rounded-xl border border-white/15 px-4 py-2 text-sm text-foam hover:bg-white/5">
-            Import JSON backup
+            Import JSON file
             <input
               type="file"
               accept="application/json,.json"
               className="hidden"
               disabled={dataBusy}
-              onChange={(e) => void onBackupFile(e.target.files?.[0] ?? null)}
+              onChange={(e) => {
+                void onBackupFile(e.target.files?.[0] ?? null);
+                e.target.value = "";
+              }}
             />
           </label>
         </div>
-        {dataMsg ? (
-          <p
-            className={`mt-3 text-sm ${dataMsg.startsWith("Imported:") || dataMsg.startsWith("Synced") ? "text-mint" : "text-[#ff8b8b]"}`}
+        <p className="mt-4 text-sm font-medium text-foam">Or paste from Notepad (easier)</p>
+        <textarea
+          value={pasteBackup}
+          onChange={(e) => setPasteBackup(e.target.value)}
+          disabled={dataBusy}
+          placeholder='Paste here (Ctrl+V). Must start with { and contain "apps" …'
+          className="mt-2 max-h-40 min-h-[88px] w-full rounded-xl border border-white/15 bg-ink/40 p-3 font-mono text-xs text-foam placeholder:text-mist/70"
+        />
+        <button
+          type="button"
+          disabled={dataBusy || !pasteBackup.trim()}
+          onClick={() => void onPasteImport()}
+          className="mt-2 rounded-xl bg-mint px-4 py-2 text-sm font-semibold text-ink disabled:opacity-60"
+        >
+          {dataBusy ? "Please wait…" : "Import pasted backup"}
+        </button>
+        {(dataBusy || dataMsg) && (
+          <div
+            role="status"
+            className={`mt-4 rounded-xl border-2 p-4 text-sm font-medium ${
+              dataBusy
+                ? "border-mint/40 bg-mint/5 text-foam"
+                : dataOk
+                  ? "border-mint/60 bg-mint/15 text-mint"
+                  : dataOk === false
+                    ? "border-[#ff8b8b]/60 bg-[#ff8b8b]/10 text-[#ff8b8b]"
+                    : "border-white/20 text-mist"
+            }`}
           >
-            {dataMsg}
-          </p>
-        ) : null}
+            <p className="text-xs uppercase tracking-wide text-mist">Import result — read this</p>
+            <p className="mt-2">{dataMsg || "Working…"}</p>
+          </div>
+        )}
       </section>
 
       <section className="panel mb-4 max-w-2xl p-5">
