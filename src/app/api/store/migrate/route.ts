@@ -32,17 +32,7 @@ export async function POST(request: Request) {
       });
     }
 
-    const empty = await isStoreEmpty();
-    if (!empty && !body.force) {
-      // Prefer merging local snapshots into DB without wiping remote.
-      const store = await migrateFromLocal(body.store!);
-      return Response.json({
-        ...store,
-        database: hasDatabaseUrl() ? "postgres" : "json-fallback",
-      });
-    }
-
-    const result = await migrateFromLocal(body.store!);
+    const result = await migrateFromLocal(body.store!, { force: Boolean(body.force) });
     return Response.json({
       ...result,
       database: hasDatabaseUrl() ? "postgres" : "json-fallback",

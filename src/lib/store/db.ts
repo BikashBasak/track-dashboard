@@ -512,7 +512,10 @@ export async function isStoreEmpty(): Promise<boolean> {
   );
 }
 
-export async function migrateFromLocal(data: StoreData): Promise<{ migrated: boolean; store: StoreData; reason?: string }> {
+export async function migrateFromLocal(
+  data: StoreData,
+  options?: { force?: boolean },
+): Promise<{ migrated: boolean; store: StoreData; reason?: string }> {
   if (!hasDatabaseUrl()) {
     const store = await upsertStoreData(data);
     return { migrated: true, store, reason: "json-fallback" };
@@ -520,12 +523,12 @@ export async function migrateFromLocal(data: StoreData): Promise<{ migrated: boo
   await ensureSchema();
   const already = await getMeta("migrated_from_local_at");
   const emptyDb = await isStoreEmpty();
-  if (already && !emptyDb) {
+  if (already && !emptyDb && !options?.force) {
     return { migrated: false, store: await readPgStore(), reason: "already-migrated" };
   }
   const store = await upsertStoreData(data);
   await setMeta("migrated_from_local_at", String(Date.now()));
-  return { migrated: true, store };
+  return { migrated: true, store, reason: options?.force ? "forced-import" : undefined };
 }
 
 export async function readStore(): Promise<StoreData> {

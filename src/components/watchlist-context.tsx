@@ -1068,23 +1068,24 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
         if (!storeHasRows(payload)) {
           return { ok: false, message: "The file has no apps, accounts, or categories." };
         }
+        const toUpload = storeHasRows(data) ? merge(data, payload) : payload;
         try {
           const res = await fetch("/api/store/migrate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ store: payload }),
+            body: JSON.stringify({ store: toUpload, force: true }),
           });
-          const json = (await res.json()) as { store?: StoreData; error?: string };
+          const json = (await res.json()) as { store?: StoreData; error?: string; reason?: string };
           if (!res.ok || !json.store) {
             return { ok: false, message: json.error || "Import failed." };
           }
-          const merged = storeHasRows(data) ? merge(data, normalize(json.store)) : normalize(json.store);
-          persistWatchlist(merged);
-          setData(merged);
-          pushStoreToServer(merged);
+          const next = normalize(json.store);
+          persistWatchlist(next);
+          setData(next);
+          pushStoreToServer(next);
           return {
             ok: true,
-            message: `Imported: ${merged.apps.length} apps, ${merged.accounts.length} accounts on this site.`,
+            message: `Imported: ${next.apps.length} apps, ${next.accounts.length} accounts. Refresh App / Account Tracking if the list does not update.`,
           };
         } catch (error) {
           return { ok: false, message: error instanceof Error ? error.message : "Import failed." };

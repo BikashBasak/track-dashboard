@@ -22,6 +22,21 @@ function minutes(ms: number) {
   return Math.round(ms / 60_000);
 }
 
+function parseBackupFileText(text: string): StoreData {
+  let trimmed = text.trim();
+  if (!trimmed || trimmed === "null") {
+    throw new Error("empty");
+  }
+  let parsed: unknown = JSON.parse(trimmed);
+  if (typeof parsed === "string") {
+    parsed = JSON.parse(parsed);
+  }
+  if (parsed && typeof parsed === "object" && "store" in parsed && (parsed as { store?: StoreData }).store) {
+    return reconcileStore((parsed as { store: StoreData }).store);
+  }
+  return reconcileStore(parsed as StoreData);
+}
+
 export default function SettingsPage() {
   const { qs } = useStorefront();
   const watch = useWatchlist();
@@ -51,12 +66,13 @@ export default function SettingsPage() {
     setDataMsg("");
     try {
       const text = await file.text();
-      const parsed = JSON.parse(text) as StoreData | { store?: StoreData };
-      const store = reconcileStore("store" in parsed && parsed.store ? parsed.store : (parsed as StoreData));
+      const store = parseBackupFileText(text);
       const result = await watch.importStoreToServer(store);
       setDataMsg(result.message);
     } catch {
-      setDataMsg("Could not read that file. Use a dashboard store JSON export or backup.");
+      setDataMsg(
+        "Could not use that file. Save the Vercel copy again in Notepad as my-tracker-backup.json (must start with { and include apps or accounts).",
+      );
     } finally {
       setDataBusy(false);
     }
@@ -154,13 +170,22 @@ export default function SettingsPage() {
           Recover old Vercel data
         </p>
         <p className="mt-2 text-sm leading-6 text-mist">
-          The live site uses a Neon database. Your old Vercel list was often saved only in this browser, not in the
-          empty Neon copy. Use one of these options:
+          Vercel and Render are different websites — each saves its own copy in the browser. Your full list from Vercel
+          is <strong className="font-medium text-foam">not</strong> read automatically here. Copy it from the old Vercel
+          tab (Console steps below), save a <span className="font-mono text-foam/90">.json</span> file, then use{" "}
+          <strong className="font-medium text-foam">Import JSON backup</strong>.
         </p>
         <ul className="mt-3 list-inside list-disc space-y-1 text-sm text-mist">
           <li>
-            Open this site in the <strong className="font-medium text-foam">same browser</strong> you used on{" "}
-            <span className="font-mono text-foam/90">track-dashboard-five.vercel.app</span>, then click restore below.
+            On <span className="font-mono text-foam/90">track-dashboard-five.vercel.app</span> → F12 → Console → paste:{" "}
+            <span className="font-mono text-xs text-foam/80">
+              copy(localStorage.getItem(&quot;track-dashboard-watchlist-v1&quot;))
+            </span>{" "}
+            → Notepad → Save as <span className="font-mono text-foam/90">backup.json</span> → import below.
+          </li>
+          <li>
+            Restore from this browser only copies data already saved on <strong className="font-medium text-foam">this</strong>{" "}
+            Render site (not Vercel).
           </li>
           <li>
             If Vercel used a <strong className="font-medium text-foam">different</strong> production{" "}
@@ -202,7 +227,13 @@ export default function SettingsPage() {
             />
           </label>
         </div>
-        {dataMsg ? <p className="mt-3 text-sm text-mist">{dataMsg}</p> : null}
+        {dataMsg ? (
+          <p
+            className={`mt-3 text-sm ${dataMsg.startsWith("Imported:") || dataMsg.startsWith("Synced") ? "text-mint" : "text-[#ff8b8b]"}`}
+          >
+            {dataMsg}
+          </p>
+        ) : null}
       </section>
 
       <section className="panel mb-4 max-w-2xl p-5">
