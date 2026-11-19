@@ -347,6 +347,9 @@ type WatchlistApi = {
   trackKeywordLocal: (term: string, ranks: KeywordRank[], store: Storefront) => TrackedKeyword;
   untrackKeywordLocal: (term: string) => void;
   applyKeywordSnapshot: (term: string, ranks: KeywordRank[], store: Storefront) => void;
+  browserCacheSummary: () => { apps: number; accounts: number; categories: number };
+  restoreBrowserCacheToServer: () => Promise<{ ok: boolean; message: string }>;
+  importStoreToServer: (store: StoreData) => Promise<{ ok: boolean; message: string }>;
 };
 
 const Ctx = createContext<WatchlistApi | null>(null);
@@ -1020,6 +1023,72 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
             k.term === key ? { ...k, snapshots: [...k.snapshots, snap].slice(-MAX_SNAPSHOTS) } : k,
           ),
         }));
+      },
+      browserCacheSummary: () => {
+        const local = readLocal();
+        return {
+          apps: local.apps.length,
+          accounts: local.accounts.length,
+          categories: local.categories.length,
+        };
+      },
+      restoreBrowserCacheToServer: async () => {
+        const local = readLocal();
+        const payload = storeHasRows(local) ? reconcileStore(local) : reconcileStore(data);
+        if (!storeHasRows(payload)) {
+          return {
+            ok: false,
+            message:
+              "This browser has no saved list. Use the same browser/profile you used on the old Vercel site, or import a backup file below.",
+          };
+        }
+        try {
+          const res = await fetch("/api/store/migrate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ store: payload }),
+          });
+          const json = (await res.json()) as { store?: StoreData; error?: string; migrated?: boolean };
+          if (!res.ok || !json.store) {
+            return { ok: false, message: json.error || "Upload to server failed." };
+          }
+          const next = normalize(json.store);
+          persistWatchlist(next);
+          setData(next);
+          return {
+            ok: true,
+            message: `Synced to server: ${next.apps.length} apps, ${next.accounts.length} accounts, ${next.categories.length} categories.`,
+          };
+        } catch (error) {
+          return { ok: false, message: error instanceof Error ? error.message : "Upload failed." };
+        }
+      },
+      importStoreToServer: async (incoming: StoreData) => {
+        const payload = reconcileStore(incoming);
+        if (!storeHasRows(payload)) {
+          return { ok: false, message: "The file has no apps, accounts, or categories." };
+        }
+        try {
+          const res = await fetch("/api/store/migrate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ store: payload }),
+          });
+          const json = (await res.json()) as { store?: StoreData; error?: string };
+          if (!res.ok || !json.store) {
+            return { ok: false, message: json.error || "Import failed." };
+          }
+          const merged = storeHasRows(data) ? merge(data, normalize(json.store)) : normalize(json.store);
+          persistWatchlist(merged);
+          setData(merged);
+          pushStoreToServer(merged);
+          return {
+            ok: true,
+            message: `Imported: ${merged.apps.length} apps, ${merged.accounts.length} accounts on this site.`,
+          };
+        } catch (error) {
+          return { ok: false, message: error instanceof Error ? error.message : "Import failed." };
+        }
       },
     }),
     [data, ready, lastCats],

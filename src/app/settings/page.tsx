@@ -13,8 +13,10 @@ import {
 import { runFullSync, resolveFullSyncMode } from "@/lib/sync/full-sync";
 import { readFullSyncMeta } from "@/lib/sync/full-sync-meta";
 import { formatDistanceToNow } from "date-fns";
-import { Database, LogOut, RefreshCw } from "lucide-react";
-import { useState } from "react";
+import type { StoreData } from "@/lib/playstore/types";
+import { reconcileStore } from "@/lib/store/reconcile";
+import { Database, LogOut, RefreshCw, Upload } from "lucide-react";
+import { useMemo, useState } from "react";
 
 function minutes(ms: number) {
   return Math.round(ms / 60_000);
@@ -29,8 +31,36 @@ export default function SettingsPage() {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");
   const [message, setMessage] = useState(fullSync.lastMessage || "");
+  const [dataMsg, setDataMsg] = useState("");
+  const [dataBusy, setDataBusy] = useState(false);
+  const browserCache = useMemo(() => watch.browserCacheSummary(), [watch]);
 
   const nextMode = resolveFullSyncMode();
+
+  async function restoreFromBrowser() {
+    setDataBusy(true);
+    setDataMsg("");
+    const result = await watch.restoreBrowserCacheToServer();
+    setDataMsg(result.message);
+    setDataBusy(false);
+  }
+
+  async function onBackupFile(file: File | null) {
+    if (!file) return;
+    setDataBusy(true);
+    setDataMsg("");
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as StoreData | { store?: StoreData };
+      const store = reconcileStore("store" in parsed && parsed.store ? parsed.store : (parsed as StoreData));
+      const result = await watch.importStoreToServer(store);
+      setDataMsg(result.message);
+    } catch {
+      setDataMsg("Could not read that file. Use a dashboard store JSON export or backup.");
+    } finally {
+      setDataBusy(false);
+    }
+  }
 
   async function syncAll(forceBaseline = false) {
     if (busy || tracked === 0) return;
@@ -104,7 +134,7 @@ export default function SettingsPage() {
             <h2 className="font-semibold">Access</h2>
             <p className="mt-1 text-sm text-mist">
               Dashboard is password-protected. Change the password with the{" "}
-              <span className="font-mono text-foam/90">DASHBOARD_PASSWORD</span> env var on Vercel.
+              <span className="font-mono text-foam/90">DASHBOARD_PASSWORD</span> env var on Render (or Vercel).
             </p>
           </div>
           <button
@@ -116,6 +146,63 @@ export default function SettingsPage() {
             Log out
           </button>
         </div>
+      </section>
+
+      <section className="panel mb-4 max-w-2xl p-5">
+        <p className="flex items-center gap-2 font-semibold">
+          <Upload className="h-4 w-4 text-mint" />
+          Recover old Vercel data
+        </p>
+        <p className="mt-2 text-sm leading-6 text-mist">
+          The live site uses a Neon database. Your old Vercel list was often saved only in this browser, not in the
+          empty Neon copy. Use one of these options:
+        </p>
+        <ul className="mt-3 list-inside list-disc space-y-1 text-sm text-mist">
+          <li>
+            Open this site in the <strong className="font-medium text-foam">same browser</strong> you used on{" "}
+            <span className="font-mono text-foam/90">track-dashboard-five.vercel.app</span>, then click restore below.
+          </li>
+          <li>
+            If Vercel used a <strong className="font-medium text-foam">different</strong> production{" "}
+            <span className="font-mono text-foam/90">DATABASE_URL</span>, paste that string in{" "}
+            <a
+              href="https://dashboard.render.com/web/srv-dbvdbuss728c73ds6700"
+              className="text-mint hover:underline"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Render → Environment
+            </a>
+            , redeploy, then refresh.
+          </li>
+        </ul>
+        <p className="mt-3 text-sm text-mist">
+          Browser cache on this device:{" "}
+          <span className="text-foam">
+            {browserCache.apps} apps · {browserCache.accounts} accounts · {browserCache.categories} categories
+          </span>
+        </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={dataBusy}
+            onClick={() => void restoreFromBrowser()}
+            className="rounded-xl bg-mint px-4 py-2 text-sm font-semibold text-ink disabled:opacity-60"
+          >
+            {dataBusy ? "Working…" : "Restore from this browser"}
+          </button>
+          <label className="cursor-pointer rounded-xl border border-white/15 px-4 py-2 text-sm text-foam hover:bg-white/5">
+            Import JSON backup
+            <input
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              disabled={dataBusy}
+              onChange={(e) => void onBackupFile(e.target.files?.[0] ?? null)}
+            />
+          </label>
+        </div>
+        {dataMsg ? <p className="mt-3 text-sm text-mist">{dataMsg}</p> : null}
       </section>
 
       <section className="panel mb-4 max-w-2xl p-5">
