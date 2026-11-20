@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { jsonError, storefrontFrom } from "@/lib/api";
 import { getDeveloperApps, getDeveloperAppsMerged } from "@/lib/playstore/provider";
-import { readStore } from "@/lib/store/db";
+import { getTrackedAccountById } from "@/lib/store/db";
 
 export async function GET(
   request: NextRequest,
@@ -23,8 +23,7 @@ export async function GET(
         };
     const apps = merged.apps;
     const scores = apps.map((a) => a.score).filter((s): s is number => typeof s === "number");
-    const local = await readStore();
-    const tracked = local.accounts.find((a) => a.developerId === developerId) ?? null;
+    const tracked = await getTrackedAccountById(developerId);
     const name = merged.name || apps[0]?.developer || tracked?.name || developerId;
     return Response.json({
       developerId,

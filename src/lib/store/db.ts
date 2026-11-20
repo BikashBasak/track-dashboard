@@ -659,6 +659,50 @@ export async function getAppHistory(appId: string): Promise<{ app: TrackedApp | 
   return { app, snapshots };
 }
 
+export async function getTrackedAccountById(developerId: string): Promise<TrackedAccount | null> {
+  if (!hasDatabaseUrl()) {
+    const store = await readJsonStore();
+    return store.accounts.find((a) => a.developerId === developerId) ?? null;
+  }
+  await ensureSchema();
+  const db = getSql();
+  const rows = await db`
+    SELECT developer_id, name, added_at, sample_icon, app_count, category_id, last_app_ids, catalog, listing_memory
+    FROM tracked_accounts WHERE developer_id = ${developerId} LIMIT 1
+  `;
+  if (!rows[0]) return null;
+  const r = rows[0];
+  const snaps = await db`
+    SELECT ts, payload FROM account_snapshots
+    WHERE developer_id = ${developerId}
+    ORDER BY ts DESC
+    LIMIT ${LIST_SNAPSHOT_CAP}
+  `;
+  return {
+    developerId,
+    name: String(r.name),
+    addedAt: Number(r.added_at),
+    sampleIcon: r.sample_icon ? String(r.sample_icon) : undefined,
+    appCount: Number(r.app_count || 0),
+    categoryId: r.category_id ? String(r.category_id) : null,
+    lastAppIds: parseJson<string[]>(r.last_app_ids, []),
+    catalog: parseJson<AppSummary[]>(r.catalog, []),
+    listingMemory: parseJson<Record<string, AppListingMemory>>(r.listing_memory, {}),
+    snapshots: snaps
+      .map((s) => ({
+        ...(parseJson<AccountSnapshot>(s.payload, {
+          ts: Number(s.ts),
+          appCount: 0,
+          avgScore: null,
+          totalMinInstalls: 0,
+          recentlyUpdatedCount: 0,
+        })),
+        ts: Number(s.ts),
+      }))
+      .reverse(),
+  };
+}
+
 export async function trackApp(app: AppDetails): Promise<TrackedApp> {
   const snap = snapshotFromApp(app);
   if (!hasDatabaseUrl()) {

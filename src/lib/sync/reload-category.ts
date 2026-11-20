@@ -4,7 +4,7 @@ import { diffListingMemory, draftAppRepublished, republishMarker } from "@/lib/n
 import { pushNotifications, unreadCount } from "@/lib/notifications/store";
 import { hasDeepListingBaseline, listingMemoryFromApp } from "@/lib/store/snapshots";
 
-const GAP_MS = 1_200;
+const GAP_MS = Math.max(0, Number(process.env.NEXT_PUBLIC_RELOAD_GAP_MS || "800") || 800);
 const ACCOUNT_APP_CAP = 40;
 
 export type CategoryReloadResult = {
